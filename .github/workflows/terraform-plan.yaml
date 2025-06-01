@@ -14,9 +14,9 @@ permissions:
   contents: read # Permission to access repository contents
 
 env:
-  WIF_PROVIDER: "projects/398862799269/locations/global/workloadIdentityPools/github-cicd/providers/github"
-  WIF_SERVICE_ACCOUNT: "gha-sa@dmgcp-del-166.iam.gserviceaccount.com"
-  GH_PAT: ${{ secrets.GH_PAT }}
+  WIF_PROVIDER: "projects/3737778013/locations/global/workloadIdentityPools/github-cicd/providers/github"
+  WIF_SERVICE_ACCOUNT: "gha-sa@gke-poc-442905.iam.gserviceaccount.com"
+  #GH_PAT: ${{ secrets.GH_PAT }}
   
 
 jobs:
@@ -90,11 +90,11 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Configure Git Authentication
-        run: |
-          echo "Setting up GitHub authentication..."
-          git config --global url."https://${{ env.GH_PAT }}@github.com/".insteadOf "https://github.com/"
-          git config --global credential.helper store
+      # - name: Configure Git Authentication
+      #   run: |
+      #     echo "Setting up GitHub authentication..."
+      #     git config --global url."https://${{ env.GH_PAT }}@github.com/".insteadOf "https://github.com/"
+      #     git config --global credential.helper store
 
       - name: Authenticate to Google Cloud
         id: auth
