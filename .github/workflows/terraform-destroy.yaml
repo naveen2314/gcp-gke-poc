@@ -1,0 +1,57 @@
+name: Terraform Destroy
+
+on:
+  workflow_dispatch: 
+
+permissions:
+  id-token: write # Ensure permission to obtain an ID token
+  contents: read # Permission to access repository contents
+
+  
+env:
+  WIF_PROVIDER: "projects/398862799269/locations/global/workloadIdentityPools/github-cicd/providers/github"
+  WIF_SERVICE_ACCOUNT: "gha-sa@dmgcp-del-166.iam.gserviceaccount.com"
+  GH_PAT: ${{ secrets.GH_PAT }}
+
+jobs:
+  Terraform-Destroy:
+    name: Terraform Destroy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Configure Git Authentication
+        run: |
+          echo "Setting up GitHub authentication..."
+          git config --global url."https://${{ env.GH_PAT }}@github.com/".insteadOf "https://github.com/"
+          git config --global credential.helper store
+      
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2.0.0
+        with:
+          token_format: "access_token"
+          workload_identity_provider: "${{ env.WIF_PROVIDER }}"
+          service_account: "${{ env.WIF_SERVICE_ACCOUNT }}"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}        
+
+      - name: Initialize Terraform
+        env: 
+            GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+        run: terraform init -backend-config="backend/dev-backend.hcl"
+
+      # - name: Terraform Format & Validate
+      #   run: |
+      #     terraform fmt -check
+      #     terraform validate
+
+      - name: Run Terraform Destroy Plan
+        run: terraform plan -var-file='vars/dev.tfvars' --destroy
+
+      - name: Terraform Destroy Apply
+        run: terraform apply -var-file='vars/dev.tfvars' --destroy -auto-approve

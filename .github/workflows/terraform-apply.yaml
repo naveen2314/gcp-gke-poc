@@ -1,0 +1,163 @@
+name: Terraform Apply
+
+on:
+  workflow_dispatch: 
+    inputs:
+      ENVIRONMENT:
+        description: "Select the environment to apply changes (dev, preprod, prod)"
+        required: true
+        type: choice
+        options:
+          - dev
+          - preprod
+          - prod
+      REGION:
+        description: "Select the region for deployment"
+        required: true
+        type: choice
+        options:
+          - us-central1
+          - us-east1
+          - us-west1
+
+permissions:
+  id-token: write # Ensure permission to obtain an ID token
+  contents: read # Permission to access repository contents
+
+  
+env:
+  WIF_PROVIDER: "projects/398862799269/locations/global/workloadIdentityPools/github-cicd/providers/github"
+  WIF_SERVICE_ACCOUNT: "gha-sa@dmgcp-del-166.iam.gserviceaccount.com"
+  GH_PAT: ${{ secrets.GH_PAT }}
+
+jobs:
+  Terraform-Plan:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.ENVIRONMENT }}
+    outputs:
+      TFVARS_FILE: ${{ steps.set-vars.outputs.TFVARS_FILE }}
+      BACKEND_FILE: ${{ steps.set-vars.outputs.BACKEND_FILE }}
+      REGION: ${{ steps.set-vars.outputs.REGION }}         
+     
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Determine TFVars and Backend File
+        id: set-vars
+        run: |
+          if [[ "${{ inputs.ENVIRONMENT }}" == "dev" ]]; then
+            TFVARS_FILE="vars/dev.tfvars"
+            BACKEND_FILE="backend/dev-backend.hcl"
+          elif [[ "${{ inputs.ENVIRONMENT }}" == "preprod" ]]; then
+            TFVARS_FILE="vars/preprod.tfvars"
+            BACKEND_FILE="backend/preprod-backend.hcl"
+          elif [[ "${{ inputs.ENVIRONMENT }}" == "prod" ]]; then
+            TFVARS_FILE="vars/prod.tfvars"
+            BACKEND_FILE="backend/prod-backend.hcl"
+          else
+            echo "Invalid environment selected!"
+            exit 1
+          fi
+
+          REGION="${{ inputs.REGION }}"
+
+          echo "TFVARS_FILE=$TFVARS_FILE" >> $GITHUB_ENV
+          echo "BACKEND_FILE=$BACKEND_FILE" >> $GITHUB_ENV
+          echo "REGION=$REGION" >> $GITHUB_ENV
+
+          echo "TFVARS_FILE=$TFVARS_FILE" >> $GITHUB_OUTPUT
+          echo "BACKEND_FILE=$BACKEND_FILE" >> $GITHUB_OUTPUT
+          echo "REGION=$REGION" >> $GITHUB_OUTPUT
+
+
+      - name: Configure Git Authentication
+        run: |
+          echo "Setting up GitHub authentication..."
+          git config --global url."https://${{ env.GH_PAT }}@github.com/".insteadOf "https://github.com/"
+          git config --global credential.helper store
+      
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2.0.0
+        with:
+          token_format: "access_token"
+          workload_identity_provider: "${{ env.WIF_PROVIDER }}"
+          service_account: "${{ env.WIF_SERVICE_ACCOUNT }}"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}        
+
+      - name: Initialize Terraform
+        env: 
+            GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+        run: terraform init -backend-config="${{ env.BACKEND_FILE }}"
+
+      - name: Terraform Format & Validate
+        run: |
+          terraform fmt -check
+          terraform validate
+
+      - name: Run Terraform Plan
+        run: terraform plan -var-file="${{ env.TFVARS_FILE }}" -out=tfplan
+
+      - name: Save Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.ENVIRONMENT }}
+          path: tfplan
+
+#   Approval-Step:
+#             runs-on: ubuntu-latest
+#             needs: Terraform-Plan
+#             environment: ${{ inputs.ENVIRONMENT }}
+#             steps:
+#               - name: Request Manual Approval
+#                 run: echo "Terraform Apply requires approval before execution."      
+
+  Terraform-Apply:
+    runs-on: ubuntu-latest
+    #needs: [Approval-Step, Terraform-Plan]
+    needs: Terraform-Plan
+    environment: ${{ inputs.ENVIRONMENT }}
+
+    steps:
+        - name: Checkout Code
+          uses: actions/checkout@v4
+
+        - name: Configure Git Authentication
+          run: |
+            echo "Setting up GitHub authentication..."
+            git config --global url."https://${{ env.GH_PAT }}@github.com/".insteadOf "https://github.com/"
+            git config --global credential.helper store
+                
+        - name: Authenticate to Google Cloud
+          id: auth
+          uses: google-github-actions/auth@v2.0.0
+          with:
+            token_format: "access_token"
+            workload_identity_provider: "${{ env.WIF_PROVIDER }}"
+            service_account: "${{ env.WIF_SERVICE_ACCOUNT }}"
+  
+        - name: Setup Terraform
+          uses: hashicorp/setup-terraform@v3
+          with:
+            terraform_version: ${{ env.TF_VERSION }}        
+  
+        - name: Initialize Terraform
+          env: 
+              GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          run: |
+              echo "Using Backend Config File: ${{ needs.Terraform-Plan.outputs.BACKEND_FILE }}"
+              terraform init -backend-config="${{ needs.Terraform-Plan.outputs.BACKEND_FILE}}"
+  
+        - name: Download Terraform Plan
+          uses: actions/download-artifact@v4
+          with:
+            name: tfplan-${{ inputs.ENVIRONMENT }}  
+  
+        - name: Terraform Apply
+          run: |
+            terraform apply -auto-approve tfplan

@@ -1,0 +1,124 @@
+name: Terraform Plan
+
+on:
+  push:
+    branches:
+      - "**"  
+      - '!main' # Run on all branches except main
+
+  pull_request:
+    branches:
+        - main
+permissions: 
+  id-token: write # Ensure permission to obtain an ID token
+  contents: read # Permission to access repository contents
+
+env:
+  WIF_PROVIDER: "projects/398862799269/locations/global/workloadIdentityPools/github-cicd/providers/github"
+  WIF_SERVICE_ACCOUNT: "gha-sa@dmgcp-del-166.iam.gserviceaccount.com"
+  GH_PAT: ${{ secrets.GH_PAT }}
+  
+
+jobs:
+  Select-Environment :
+    runs-on: ubuntu-latest
+    outputs:
+        ENVIRONMENT: ${{ steps.set-env.outputs.ENVIRONMENT }}
+        TFVARS_FILE: ${{ steps.set-env.outputs.TFVARS_FILE }}
+        BACKEND_FILE: ${{ steps.set-env.outputs.BACKEND_FILE }}
+
+    steps:
+      - name: Checkout Code  
+        uses: actions/checkout@v4
+    
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v44
+      
+      - name: Determine Environment
+        id: set-env
+        run: |
+          #ENV="dev"  # Default to dev
+
+          echo "Changed files: ${{ steps.changed-files.outputs.all_changed_files }}"  # Debugging output
+
+          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+            if [[ "$file" == "vars/dev.tfvars" ]]; then
+              ENV="dev"
+              TFVARS_FILE="vars/dev.tfvars"
+              BACKEND_FILE="backend/dev-backend.hcl"
+            elif [[ "$file" == "vars/preprod.tfvars" ]]; then
+              ENV="preprod"
+              TFVARS_FILE="vars/preprod.tfvars"
+              BACKEND_FILE="backend/preprod-backend.hcl"
+            elif [[ "$file" == "vars/prod.tfvars" ]]; then
+              ENV="prod"
+              TFVARS_FILE="vars/prod.tfvars"
+              BACKEND_FILE="backend/prod-backend.hcl"
+            fi
+          done  
+          if [[ -z "$ENV" ]]; then
+            ENV="dev"
+            TFVARS_FILE="vars/dev.tfvars"
+            BACKEND_FILE="backend/dev-backend.hcl"
+          fi
+          echo "Selected environment: $ENV"
+          echo "TFVARS File: $TFVARS_FILE"
+          echo "Backend File: $BACKEND_FILE"
+
+          echo "ENVIRONMENT=$ENV" >> "$GITHUB_ENV"
+          echo "TFVARS_FILE=$TFVARS_FILE" >> "$GITHUB_ENV"
+          echo "BACKEND_FILE=$BACKEND_FILE" >> "$GITHUB_ENV"
+
+          echo "ENVIRONMENT=$ENV" >> $GITHUB_OUTPUT
+          echo "TFVARS_FILE=$TFVARS_FILE" >> $GITHUB_OUTPUT
+          echo "BACKEND_FILE=$BACKEND_FILE" >> $GITHUB_OUTPUT
+         
+
+      - name: Display Selected Environment
+        run: | 
+          echo "Running Terraform Plan for ${{ steps.set-env.outputs.ENVIRONMENT  }} environment"
+          echo "Backend File: ${{ steps.set-env.outputs.BACKEND_FILE }}"
+          echo "TFVARS File: ${{ steps.set-env.outputs.TFVARS_FILE }}"
+
+  Terraform-Plan:
+    runs-on: ubuntu-latest
+    needs: Select-Environment
+    environment: ${{ needs.Select-Environment.outputs.ENVIRONMENT }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure Git Authentication
+        run: |
+          echo "Setting up GitHub authentication..."
+          git config --global url."https://${{ env.GH_PAT }}@github.com/".insteadOf "https://github.com/"
+          git config --global credential.helper store
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2.0.0
+        with:
+          token_format: "access_token"
+          workload_identity_provider: "${{ env.WIF_PROVIDER }}"
+          service_account: "${{ env.WIF_SERVICE_ACCOUNT }}"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Initialize Terraform
+        env: 
+            GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+        run: terraform init -backend-config="${{ needs.Select-Environment.outputs.BACKEND_FILE }}"
+
+      - name: Terraform Format & Validate
+        run: |
+          terraform fmt -recursive
+          terraform fmt -check
+          terraform validate
+          
+      - name: Terraform Plan
+        run: terraform plan -var-file="${{ needs.Select-Environment.outputs.TFVARS_FILE }}"
