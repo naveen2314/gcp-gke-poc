@@ -26,8 +26,8 @@ permissions:
 
   
 env:
-  WIF_PROVIDER: "projects/3737778013/locations/global/workloadIdentityPools/github-cicd/providers/github"
-  WIF_SERVICE_ACCOUNT: "gha-sa@gke-poc-442905.iam.gserviceaccount.com"
+  WIF_PROVIDER: "projects/*********/locations/global/workloadIdentityPools/github-cicd/providers/github"
+  WIF_SERVICE_ACCOUNT: ""
   GH_PAT: ${{ secrets.GH_PAT }}
 
 jobs:
